@@ -1,39 +1,43 @@
 from .imports import *
 from .torch_imports import *
 
+def noop(*args, **kwargs): pass
+
+# sum_{i=1,n}(a*r^i)
 def sum_geom(a,r,n): return a*n if r==1 else math.ceil(a*(1-r**n)/(1-r))
 
-conv_dict = {np.dtype('int8'): torch.LongTensor, np.dtype('int16'): torch.LongTensor,
+conv_dict = {
+    np.dtype('int8'): torch.LongTensor, np.dtype('int16'): torch.LongTensor,
     np.dtype('int32'): torch.LongTensor, np.dtype('int64'): torch.LongTensor,
-    np.dtype('float32'): torch.FloatTensor, np.dtype('float64'): torch.FloatTensor}
+    np.dtype('float32'): torch.FloatTensor, np.dtype('float64'): torch.FloatTensor,
+}
+
+# Made up. Like R's sapply for simple apply that deals with all shapes.
+def sapply(x, f): return [f(o) for o in x] if listy(x) else f(x)
+def listy(x): return isinstance(x, (list,tuple))
 
 def A(*a):
     return np.array(a[0]) if len(a)==1 else [np.array(o) for o in a]
 
-def T(a):
-    if torch.is_tensor(a): res = a
-    else:
-        a = np.array(np.ascontiguousarray(a))
-        if a.dtype in (np.int8, np.int16, np.int32, np.int64):
-            res = torch.LongTensor(a.astype(np.int64))
-        elif a.dtype in (np.float32, np.float64):
-            res = torch.FloatTensor(a.astype(np.float32))
-        else: raise NotImplementedError(a.dtype)
-    return to_gpu(res, async=True)
+def T_(a):
+    if torch.is_tensor(a): return a
+    a = np.array(np.ascontiguousarray(a))
+    if a.dtype in (np.int8, np.int16, np.int32, np.int64):
+        return torch.LongTensor(a.astype(np.int64))
+    if a.dtype in (np.float32, np.float64):
+        return torch.FloatTensor(a.astype(np.float32))
+    raise NotImplementedError(a.dtype)
+def T(a): return to_gpu(T_(a), async=True)
 
-def create_variable(x, volatile, requires_grad=False):
-    if not isinstance(x, Variable):
-        x = Variable(T(x), volatile=volatile, requires_grad=requires_grad)
-    return x
+def create_variable(x, vol, grad=False):
+    if isinstance(x, Variable):
+        return x
+    return Variable(T(x), vol=vol, grad=grad)
 
-def V_(x, requires_grad=False, volatile=False):
-    return create_variable(x, volatile=volatile, requires_grad=requires_grad)
-def V(x, requires_grad=False, volatile=False):
-    return [V_(o, requires_grad=requires_grad, volatile=volatile)
-            for o in x] if isinstance(x,(list,tuple)) else V_(x, requires_grad=requires_grad, volatile=volatile)
-
-def VV_(x): return create_variable(x, True)
-def VV(x):  return [VV_(o) for o in x] if isinstance(x,list) else VV_(x)
+def V_(x, grad=False, vol=False): return create_variable(x, vol, grad=grad)
+def VV_(x):                       return create_variable(x, True)
+def V(x, grad=False, vol=False):  return sapply(x, partial(V_, grad=grad, vol=vol))
+def VV(x):                        return sapply(x, VV_)
 
 def to_np(v):
     if isinstance(v, (np.ndarray, np.generic)): return v
@@ -42,10 +46,8 @@ def to_np(v):
     return v.cpu().numpy()
 
 USE_GPU=True
-def to_gpu(x, *args, **kwargs):
-    return x.cuda(*args, **kwargs) if torch.cuda.is_available() and USE_GPU else x
-
-def noop(*args, **kwargs): return
+def has_cuda(): return torch.cuda.is_available()
+def to_gpu(x, *args, **kwargs): return x.cuda(*args, **kwargs) if has_cuda() and USE_GPU else x
 
 def split_by_idxs(seq, idxs):
     last = 0
@@ -58,32 +60,41 @@ def trainable_params_(m):
     return [p for p in m.parameters() if p.requires_grad]
 
 def chain_params(p):
-    if isinstance(p, (list,tuple)):
+    if listy(p):
         return list(chain(*[trainable_params_(o) for o in p]))
     return trainable_params_(p)
 
+# Presumably `m` means "module" in the torch.nn sense.
 def set_trainable_attr(m,b):
     m.trainable=b
     for p in m.parameters(): p.requires_grad=b
 
 def apply_leaf(m, f):
     c = children(m)
-    if isinstance(m, nn.Module): f(m)
+    if isinstance(m, nn.Module): f(m)  # not returned, f is a sink.
     if len(c)>0:
         for l in c: apply_leaf(l,f)
+    # `len` duck typing breaks before anything can get here.
 
 def set_trainable(l, b):
     apply_leaf(l, lambda m: set_trainable_attr(m,b))
 
-def SGD_Momentum(momentum):
-    return lambda *args, **kwargs: optim.SGD(*args, momentum=momentum, **kwargs)
+def SGD_Momentum(momentum): return partial(optim.SGD, momentum=momentum)
 
 def one_hot(a,c): return np.eye(c)[a]
 
-def partition(a, sz): return [a[i:i+sz] for i in range(0, len(a), sz)]
+def partition(a,sz): return [a[i:i+sz] for i in range(0, len(a), sz)]
+def partition_by_cores(a): return partition(a, len(a)//num_cpus() + 1)
 
-def partition_by_cores(a):
-    return partition(a, len(a)//num_cpus() + 1)
+def chunk_iter(it, sz):
+    while True:
+        chunk = []
+        try:
+            for _ in range(sz): chunk.append(next(it))
+            yield chunk
+        except StopIteration:
+            if chunk: yield chunk
+            break
 
 def num_cpus():
     try:
@@ -93,7 +104,8 @@ def num_cpus():
 
 
 class BasicModel():
-    def __init__(self,model,name='unnamed'): self.model,self.name = model,name
+    """Must specify a `children` method."""
+    def __init__(self, model, name='unnamed'): self.model,self.name = model,name
     def get_layer_groups(self, do_fc=False): return children(self.model)
 
 class SingleModel(BasicModel):
@@ -102,8 +114,7 @@ class SingleModel(BasicModel):
 class SimpleNet(nn.Module):
     def __init__(self, layers):
         super().__init__()
-        self.layers = nn.ModuleList([
-            nn.Linear(layers[i], layers[i + 1]) for i in range(len(layers) - 1)])
+        self.layers = nn.ModuleList([nn.Linear(l1, l2) for l1, l2 in zip(layers, layers[1:])])
 
     def forward(self, x):
         x = x.view(x.size(0), -1)
@@ -118,15 +129,3 @@ def load(fn): return pickle.load(open(fn,'rb'))
 def load2(fn): return pickle.load(open(fn,'rb'), encoding='iso-8859-1')
 
 def load_array(fname): return bcolz.open(fname)[:]
-
-
-def chunk_iter(iterable, chunk_size):
-    while True:
-        chunk = []
-        try:
-            for _ in range(chunk_size): chunk.append(next(iterable))
-            yield chunk
-        except StopIteration:
-            if chunk: yield chunk
-            break
-
