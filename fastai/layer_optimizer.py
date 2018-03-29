@@ -1,44 +1,36 @@
-from .imports import *
-from .torch_imports import *
-from .core import *
-
-def opt_params(parm, lr, wd):
-    return {'params': chain_params(parm), 'lr':lr, 'weight_decay':wd}
+from .core import listy, trainable_params
 
 class LayerOptimizer():
     def __init__(self, opt_fn, layer_groups, lrs, wds=None):
-        if not isinstance(layer_groups, (list,tuple)): layer_groups=[layer_groups]
-        if not isinstance(lrs, Iterable): lrs=[lrs]
-        if len(lrs)==1: lrs=lrs*len(layer_groups)
-        if wds is None: wds=0.
-        if not isinstance(wds, Iterable): wds=[wds]
-        if len(wds)==1: wds=wds*len(layer_groups)
+        if not listy(layer_groups): layer_groups = [layer_groups]
+        lrs = broadcast(lrs, layer_groups)
+        wds = broadcast(wds, layer_groups, default=0.)
         self.layer_groups,self.lrs,self.wds = layer_groups,lrs,wds
-        self.opt = opt_fn(self.opt_params())
-
-    def opt_params(self):
-        assert(len(self.layer_groups) == len(self.lrs))
-        assert(len(self.layer_groups) == len(self.wds))
-        params = list(zip(self.layer_groups,self.lrs,self.wds))
-        return [opt_params(*p) for p in params]
+        self.opt = opt_fn([
+            {'params': trainable_params(lg), 'lr': lr, 'weight_decay': wd}
+            for lg,lr,wd in zip(self.layer_groups, self.lrs, self.wds)
+        ])
 
     @property
     def lr(self): return self.lrs[-1]
 
     def set_lrs(self, lrs):
-        self.lrs=lrs
-        set_lrs(self.opt, lrs)
+        self.lrs = lrs
+        update_opt('lr', self.opt, lrs)
 
     def set_wds(self, wds):
-        self.wds=wds
-        set_wds(self.opt, wds)
+        self.wds = wds
+        update_opt('weight_decay', self.opt, wds)
 
-def set_lrs(opt, lrs):
-    if not isinstance(lrs, Iterable): lrs=[lrs]
-    if len(lrs)==1: lrs=lrs*len(opt.param_groups)
-    for pg,lr in zip(opt.param_groups,lrs): pg['lr'] = lr
 
-def set_wds(opt, wds):
-    if not isinstance(wds, Iterable): wds=[wds]
-    if len(wds)==1: wds=wds*len(opt.param_groups)
-    for pg,wd in zip(opt.param_groups,wds): pg['weight_decay'] = wd
+def broadcast(xs, along, default=None):
+    if xs is None: xs = default
+    if not isinstance(xs, Iterable): xs = [xs]
+    if len(xs)==1: xs = xs*len(along)
+    return xs
+
+def zip_along(xs, along):
+    return zip(broadcast(xs, along), along)
+
+def update_opt(param, opt, xs):
+    for x, pg in zip_along(xs, opt.param_groups): pg[param] = x
