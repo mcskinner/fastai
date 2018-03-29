@@ -3,7 +3,7 @@ from .torch_imports import *
 
 def noop(*args, **kwargs): pass
 
-# sum_{i=1,n}(a*r^i)
+# Only used by learner; likely for cycle_mult e.g. 2x needs 2^n-1 iterations.
 def sum_geom(a,r,n): return a*n if r==1 else math.ceil(a*(1-r**n)/(1-r))
 
 conv_dict = {
@@ -41,7 +41,7 @@ def VV(x):                        return sapply(x, VV_)
 
 def to_np(v):
     if isinstance(v, (np.ndarray, np.generic)): return v
-    if isinstance(v, (list,tuple)): return [to_np(o) for o in v]
+    if listy(v): return [to_np(o) for o in v]
     if isinstance(v, Variable): v=v.data
     return v.cpu().numpy()
 
