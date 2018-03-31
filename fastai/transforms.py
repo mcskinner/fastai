@@ -91,70 +91,77 @@ class TfmType(IntEnum):
 
 
 class Denormalize():
-    """ De-normalizes an image, returning it to original format.
-    """
+    """De-normalizes an image, returning it to original format."""
     def __init__(self, m, s):
-        self.m=np.array(m, dtype=np.float32)
-        self.s=np.array(s, dtype=np.float32)
-    def __call__(self, x): return x*self.s+self.m
+        self.m = np.array(m, dtype=np.float32)
+        self.s = np.array(s, dtype=np.float32)
+
+    def __call__(self, x):
+        return x*self.s + self.m
 
 
 class Normalize():
-    """ Normalizes an image.  """
+    """Normalizes an image."""
     def __init__(self, m, s, tfm_y=TfmType.NO):
-        self.m=np.array(m, dtype=np.float32)
-        self.s=np.array(s, dtype=np.float32)
-        self.tfm_y=tfm_y
+        self.m = np.array(m, dtype=np.float32)
+        self.s = np.array(s, dtype=np.float32)
+        self.tfm_y = tfm_y
 
     def __call__(self, x, y=None):
         x = (x-self.m)/self.s
         if self.tfm_y==TfmType.PIXEL and y is not None: y = (y-self.m)/self.s
         return x,y
 
+
 class ChannelOrder():
-    def __init__(self, tfm_y=TfmType.NO): self.tfm_y=tfm_y
+    """Roll channels to the front for pytorch."""
+    def __init__(self, tfm_y=TfmType.NO):
+        self.tfm_y = tfm_y
 
     def __call__(self, x, y):
-        x = np.rollaxis(x, 2)
+        # Should we maybe assert that everything has dimension 3?
         #if isinstance(y,np.ndarray) and (len(y.shape)==3):
+        x = np.rollaxis(x, 2)  # move axis 2 to the front.
         if self.tfm_y==TfmType.PIXEL: y = np.rollaxis(y, 2)
         elif self.tfm_y==TfmType.CLASS: y = y[...,0]
         return x,y
 
 
-def to_bb(YY, y):
-    cols,rows = np.nonzero(YY)
+def to_bb(x):
+    """Compute a bounding box: (left, top, right, bottom)."""
+    cols,rows = np.nonzero(x)
     if len(cols)==0: return np.zeros(4, dtype=np.float32)
-    top_row = np.min(rows)
     left_col = np.min(cols)
-    bottom_row = np.max(rows)
+    top_row = np.min(rows)
     right_col = np.max(cols)
+    bottom_row = np.max(rows)
     return np.array([left_col, top_row, right_col, bottom_row], dtype=np.float32)
 
 
-def coords2px(y, x):
-    """ Transforming coordinates to pixels.
+def coords2px(bb, x):
+    """Transform a bounding box into an image.
 
     Arguments:
-        y : np array
-            vector in which (y[0], y[1]) and (y[2], y[3]) are the
-            the corners of a bounding box.
-        x : image
-            an image
+        bb : np array of length 4, as returned by `to_bb`.
+             That is, (bb[0], bb[1]) and (bb[2], bb[3]) are corners
+             of a (left, top), (right, bottom) bounding box.
+        x  : image
+             image on which to project the bounding box.
     Returns:
-        Y : image
-            of shape x.shape
+        t : image
+            of shape x.shape, all zeros except ones at the corners of
+            the bounding box.
     """
-    rows = np.rint([y[0], y[0], y[2], y[2]]).astype(int)
-    cols = np.rint([y[1], y[3], y[1], y[3]]).astype(int)
+    rows = np.rint([bb[0], bb[0], bb[2], bb[2]]).astype(int)
+    cols = np.rint([bb[1], bb[3], bb[1], bb[3]]).astype(int)
     r,c,*_ = x.shape
-    Y = np.zeros((r, c))
-    Y[rows, cols] = 1
-    return Y
+    y = np.zeros((r, c))
+    y[rows, cols] = 1
+    return y
 
 
 class Transform():
-    """ A class that represents a transform.
+    """A class that represents a transform.
 
     All other transforms should subclass it. All subclasses should override
     do_transform.
@@ -165,10 +172,12 @@ class Transform():
             type of transform
     """
     def __init__(self, tfm_y=TfmType.NO):
-        self.tfm_y=tfm_y
+        self.tfm_y = tfm_y
         self.store = threading.local()
 
-    def set_state(self): pass
+    def set_state(self):
+        pass
+
     def __call__(self, x, y):
         self.set_state()
         x,y = ((self.transform(x),y) if self.tfm_y==TfmType.NO
@@ -176,42 +185,44 @@ class Transform():
                 else self.transform_coord(x,y))
         return x, y
 
-    def transform_coord(self, x, y): return self.transform(x),y
+    def transform_coord(self, x, y):
+        return self.transform(x),y
 
     def transform(self, x, y=None):
         x = self.do_transform(x,False)
         return (x, self.do_transform(y,True)) if y is not None else x
 
-    def do_transform(self, x, is_y): raise NotImplementedError
+    def do_transform(self, x, is_y):
+        raise NotImplementedError
 
 
 class CoordTransform(Transform):
-    """ A coordinate transform.  """
+    """A coordinate transform.  """
 
     @staticmethod
     def make_square(y, x):
         r,c,*_ = x.shape
         y1 = np.zeros((r, c))
-        y = y.astype(np.int)
-        y1[y[0]:y[2], y[1]:y[3]] = 1.
+        left,top,bottom,right = y.astype(np.int)
+        y1[left:right, bottom:top] = 1.
         return y1
-
-    def map_y(self, y0, x):
-        y = CoordTransform.make_square(y0, x)
-        y_tr = self.do_transform(y, True)
-        return to_bb(y_tr, y)
 
     def transform_coord(self, x, ys):
         yp = partition(ys, 4)
-        y2 = [self.map_y(y,x) for y in yp]
+        y2 = [self.map_y_(y,x) for y in yp]
         x = self.do_transform(x, False)
         return x, np.concatenate(y2)
 
+    def map_y_(self, bb, x):
+        y = self.make_square(bb, x)
+        y_tr = self.do_transform(y, True)
+        return to_bb(y_tr)
+
 
 class AddPadding(CoordTransform):
-    """ A class that represents adding paddings to an image.
+    """Add a padding/border around each image.
 
-    The default padding is border_reflect
+    The default mode is border_reflect
     Arguments
     ---------
         pad : int
@@ -225,6 +236,7 @@ class AddPadding(CoordTransform):
 
     def do_transform(self, im, is_y):
         return cv2.copyMakeBorder(im, self.pad, self.pad, self.pad, self.pad, self.mode)
+
 
 class CenterCrop(CoordTransform):
     """ A class that represents a Center Crop.
@@ -453,9 +465,8 @@ class PassThru(CoordTransform):
         return x
 
 class RandomBlur(Transform):
-    """
-    Adds a gaussian blur to the image at chance.
-    Multiple blur strengths can be configured, one of them is used by random chance.
+    """Adds a gaussian blur to the image with some probability.
+    Multiple blur strengths can be configured, one of them is used at random.
     """
 
     def __init__(self, blur_strengths=5, probability=0.5, tfm_y=TfmType.NO):
@@ -477,17 +488,15 @@ class RandomBlur(Transform):
 
 
 def compose(im, y, fns):
-    """ apply a collection of transformation functions fns to images
-    """
+    """Apply a collection of transformation functions fns to images."""
     for fn in fns:
         #pdb.set_trace()
-        im, y =fn(im, y)
+        im, y = fn(im, y)
     return im if y is None else (im, y)
 
 
 class CropType(IntEnum):
-    """ Type of image cropping.
-    """
+    """Type of image cropping."""
     RANDOM = 1
     CENTER = 2
     NO = 3
@@ -575,8 +584,8 @@ def tfms_from_stats(stats, sz, aug_tfms=None, max_zoom=None, pad=0, crop_type=Cr
     tfm_denorm = Denormalize(*stats)
     val_crop = CropType.CENTER if crop_type==CropType.RANDOM else crop_type
     val_tfm = image_gen(tfm_norm, tfm_denorm, sz, pad=pad, crop_type=val_crop, tfm_y=tfm_y, sz_y=sz_y)
-    trn_tfm=image_gen(tfm_norm, tfm_denorm, sz, tfms=aug_tfms, max_zoom=max_zoom,
-                      pad=pad, crop_type=crop_type, tfm_y=tfm_y, sz_y=sz_y, pad_mode=pad_mode)
+    trn_tfm = image_gen(tfm_norm, tfm_denorm, sz, pad=pad, crop_type=crop_type, tfm_y=tfm_y, sz_y=sz_y,
+                        tfms=aug_tfms, max_zoom=max_zoom, pad_mode=pad_mode)
     return trn_tfm, val_tfm
 
 
