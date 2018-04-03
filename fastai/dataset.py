@@ -294,9 +294,7 @@ class ModelData():
         self.path,self.trn_dl,self.val_dl,self.test_dl = path,trn_dl,val_dl,test_dl
 
     @classmethod
-    def from_dls(cls, path,trn_dl,val_dl,test_dl=None):
-        #trn_dl,val_dl = DataLoader(trn_dl),DataLoader(val_dl)
-        #if test_dl: test_dl = DataLoader(test_dl)
+    def from_dls(cls, path, trn_dl, val_dl, test_dl=None):
         return cls(path, trn_dl, val_dl, test_dl)
 
     @property
@@ -370,8 +368,10 @@ class ImageData(ModelData):
 
 
 class ImageClassifierData(ImageData):
+    # Seems like maybe this belongs in ModelData.
     @property
-    def is_multi(self): return self.trn_dl.dataset.is_multi
+    def is_multi(self):
+        return self.trn_ds.is_multi
 
     @classmethod
     def from_arrays(cls, path, trn, val, bs=64, tfms=(None,None), classes=None, num_workers=4, test=None):
@@ -391,8 +391,8 @@ class ImageClassifierData(ImageData):
         Returns:
             ImageClassifierData
         """
-        datasets = cls.get_ds(ArraysIndexDataset, trn, val, tfms, test=test)
-        return cls(path, datasets, bs, num_workers, classes=classes)
+        datasets = ImageData.get_ds(ArraysIndexDataset, trn, val, tfms, test=test)
+        return ImageClassifierData(path, datasets, bs, num_workers, classes=classes)
 
     @classmethod
     def from_paths(cls, path, bs=64, tfms=(None,None), trn_name='train', val_name='valid', test_name=None, test_with_labels=False, num_workers=8):
@@ -415,8 +415,8 @@ class ImageClassifierData(ImageData):
         if test_name:
             test = folder_source(path, test_name) if test_with_labels else read_dir(path, test_name)
         else: test = None
-        datasets = cls.get_ds(FilesIndexArrayDataset, trn, val, tfms, path=path, test=test)
-        return cls(path, datasets, bs, num_workers, classes=trn[2])
+        datasets = ImageData.get_ds(FilesIndexArrayDataset, trn, val, tfms, path=path, test=test)
+        return ImageClassifierData(path, datasets, bs, num_workers, classes=trn[2])
 
     @classmethod
     def from_csv(cls, path, folder, csv_fname, bs=64, tfms=(None,None),
@@ -445,22 +445,22 @@ class ImageClassifierData(ImageData):
             ImageClassifierData
         """
         fnames,y,classes = csv_source(folder, csv_fname, skip_header, suffix, continuous=continuous)
-        return cls.from_names_and_array(path, fnames, y, classes, val_idxs, test_name,
+        return ImageClassifierData.from_names_and_array(path, fnames, y, classes, val_idxs, test_name,
                 num_workers=num_workers, suffix=suffix, tfms=tfms, bs=bs, continuous=continuous)
 
     @classmethod
     def from_names_and_array(cls, path, fnames,y,classes, val_idxs=None, test_name=None,
             num_workers=8, suffix='', tfms=(None,None), bs=64, continuous=False):
         val_idxs = get_cv_idxs(len(fnames)) if val_idxs is None else val_idxs
-        ((val_fnames,trn_fnames),(val_y,trn_y)) = split_by_idx(val_idxs, np.array(fnames), y)
+        (val_fnames,trn_fnames),(val_y,trn_y) = split_by_idx(val_idxs, np.array(fnames), y)
 
         test_fnames = read_dir(path, test_name) if test_name else None
         if continuous: f = FilesIndexArrayRegressionDataset
-        else:
-            f = FilesIndexArrayDataset if len(trn_y.shape)==1 else FilesNhotArrayDataset
-        datasets = cls.get_ds(f, (trn_fnames,trn_y), (val_fnames,val_y), tfms,
-                               path=path, test=test_fnames)
-        return cls(path, datasets, bs, num_workers, classes=classes)
+        elif len(trn_y.shape)==1: f = FilesIndexArrayDataset
+        else: FilesNhotArrayDataset
+        datasets = ImageData.get_ds(f, (trn_fnames,trn_y), (val_fnames,val_y), tfms,
+                                    path=path, test=test_fnames)
+        return ImageClassifierData(path, datasets, bs, num_workers, classes=classes)
 
 def split_by_idx(idxs, *a):
     """
@@ -473,7 +473,7 @@ def split_by_idx(idxs, *a):
             First element of each tuple is an array composed from elements selected by idxs,
             second element is an array of remaining elements.
     """
-    mask = np.zeros(len(a[0]),dtype=bool)
+    mask = np.zeros(len(a[0]), dtype=bool)
     mask[np.array(idxs)] = True
     return [(o[mask],o[~mask]) for o in a]
 

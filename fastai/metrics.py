@@ -1,5 +1,6 @@
-from .imports import *
-from .torch_imports import *
+import functools
+import numpy as np
+import torch
 
 def accuracy_np(preds, targs):
     preds = np.argmax(preds, 1)
@@ -10,11 +11,10 @@ def accuracy(preds, targs):
     return (preds==targs).float().mean()
 
 def accuracy_thresh(thresh):
-    return lambda preds,targs: accuracy_multi(preds, targs, thresh)
+    return functools.partial(accuracy_multi, thresh=thresh)
 
 def accuracy_multi(preds, targs, thresh):
     return ((preds>thresh).float()==targs).float().mean()
 
 def accuracy_multi_np(preds, targs, thresh):
     return ((preds>thresh)==targs).mean()
-
