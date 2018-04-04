@@ -367,14 +367,19 @@ class RandomRotate(CoordTransform):
     """
     def __init__(self, deg, p=0.75, mode=cv2.BORDER_REFLECT, tfm_y=TfmType.NO):
         super().__init__(tfm_y)
-        self.deg,self.mode,self.p = deg,mode,p
+        self.deg,self.p = deg,p
+        if tfm_y == TfmType.COORD or tfm_y == TfmType.CLASS:
+            self.modes = (mode,cv2.BORDER_CONSTANT)
+        else:
+            self.modes = (mode,mode)
 
     def set_state(self):
         self.store.rdeg = rand0(self.deg)
         self.store.rp = random.random()<self.p
 
     def do_transform(self, x, is_y):
-        if self.store.rp: x = rotate_cv(x, self.store.rdeg, mode=self.mode,
+        if self.store.rp: x = rotate_cv(x, self.store.rdeg, 
+                mode= self.modes[1] if is_y else self.modes[0],
                 interpolation=cv2.INTER_NEAREST if is_y else cv2.INTER_AREA)
         return x
 
