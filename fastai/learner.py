@@ -64,9 +64,10 @@ class Learner():
     
     def lsuv_init(self, needed_std=1.0, std_tol=0.1, max_attempts=10, do_orthonorm=False):         
         x = V(next(iter(self.data.trn_dl))[0])
-        self.models.model=apply_lsuv_init(self.model, x, needed_std=needed_std, std_tol=std_tol,
-                            max_attempts=max_attempts, do_orthonorm=do_orthonorm, 
-                            cuda=USE_GPU and torch.cuda.is_available())
+        self.models.model = apply_lsuv_init(
+            self.model, x, needed_std=needed_std, std_tol=std_tol,
+            max_attempts=max_attempts, do_orthonorm=do_orthonorm,
+            cuda=USE_GPU and torch.cuda.is_available())
 
     def set_bn_freeze(self, m, do_freeze):
         if hasattr(m, 'running_mean'): m.bn_freeze = do_freeze
